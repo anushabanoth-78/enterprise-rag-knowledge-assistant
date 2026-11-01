@@ -1,198 +1,316 @@
-# Enterprise AI Knowledge Assistant
+# 📚 Enterprise AI Knowledge Assistant
 
-Upload company PDFs, ask questions in plain language, and get answers that cite the **file and page** they
-came from. Built as a multi-user system: every user's documents are isolated, ingestion runs in the
-background, and when the documents do not contain the answer the system says so instead of guessing.
+Ask questions about your PDFs and get answers that **cite the file and page** they came from. Built with **hybrid retrieval (pgvector + full-text)**, **cross-encoder reranking**, **FastAPI + Celery**, a **Next.js** frontend and **Docker Compose**.
 
-**Live demo:** _add your deployed URL here_ · **Demo video:** _add a 1–2 minute recording_ · **Screenshots:** _add to `docs/screenshots/`_
+---
+<a id="table-of-contents"></a>
 
-## The problem
+## Table of Contents
 
-A company has hundreds of PDFs: HR policies, handbooks, technical manuals, finance reports. Finding "how many
-annual leave days do I get?" means opening several documents and searching manually. This project lets an
-employee ask the question and returns the answer with sources:
+- [Overview](#overview)
+- [Demo](#demo)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Project Structure](#project-structure)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Running the App](#running-the-app)
+- [How Retrieval Works](#how-retrieval-works)
+- [Choosing an LLM](#choosing-an-llm)
+- [Troubleshooting](#troubleshooting)
+- [Technologies Used](#technologies-used)
+- [Limitations](#limitations)
+- [Future Improvements](#future-improvements)
+- [Project Author](#project-author)
 
-> Employees are eligible for 20 annual leave days per calendar year [1].
-> **Sources:** HR_Policy_2026.pdf, page 12 (click to open that page)
+<a id="overview"></a>
+## 🔍 Overview
 
-*(Illustrative: real answers depend on the documents you upload.)*
+Finding one answer in many PDFs (policies, handbooks, resumes, reports) means opening each file and searching by hand. This project lets a user upload PDFs, ask a question in plain language, and read a short answer with numbered sources:
 
-## What makes it more than a "ChatGPT PDF chatbot"
+> The student holds a B.Tech in Computer Science and Engineering from IIT Goa [1].
+> **Source 1:** Resume.pdf, page 1
 
-| Basic PDF chatbot | This project |
+*(Illustrative example. Real answers depend on the documents you upload.)*
+
+It combines:
+
+- **Hybrid retrieval**: pgvector similarity search + PostgreSQL full-text search, merged with Reciprocal Rank Fusion
+- **Cross-encoder reranking** (sentence-transformers, running on PyTorch)
+- **A relevance threshold**: if no passage is good enough, the LLM is *not called* and the user gets "I could not find this in your documents."
+- **Page-level citations**, checked on the server
+- **Async ingestion** with Celery and Redis
+
+⬆️ [Back to Top](#table-of-contents)
+
+<a id="demo"></a>
+## 🎬 Demo
+
+**Live demo:** _add your deployed URL here_
+
+▶️ **Demo video:** _add your 1–2 minute recording link here_
+
+### Screenshots
+
+Add your own screenshots to `docs/screenshots/` and link them here. Use your own documents only.
+
+| Ask page (cited answer) | Compare models page |
 |---|---|
-| One user, one file, in memory | Many users, many documents, PostgreSQL, per-user isolation enforced in SQL and tested |
-| Upload blocks until done | Async ingestion: API returns 202, Celery worker indexes in the background, status is visible and retryable |
-| Vector search only | Hybrid retrieval: pgvector + Postgres full-text, fused with RRF, then cross-encoder reranking |
-| Answers whatever it retrieved | Relevance threshold: if nothing passes, the LLM is **not called** and the user gets "not found" |
-| "Trust me" answers | Page-level citations, validated server-side, clickable to open the PDF at that page |
-| Single model | Hosted API or local Ollama, streaming responses, side-by-side model comparison with latency and tokens |
-| No operations story | Auth + token revocation, rate limits, upload limits, migrations, structured logs, health checks, admin metrics, CI |
+| `![Ask](docs/screenshots/ask.png)` | `![Compare](docs/screenshots/compare.png)` |
 
-## Features
+> **Privacy tip:** do not show other people's resumes or personal data in screenshots. Use sample documents.
 
-* **Auth:** register/login, JWT with expiry, bcrypt (SHA-256 pre-hash), logout that really revokes the token, per-IP brute-force limits.
-* **Documents:** multi-upload, status (`queued → processing → ready | failed`), pagination, search, reprocess, delete (removes chunks, vectors and the stored file), duplicate detection.
-* **Retrieval:** vector + full-text + RRF + rerank + threshold, document/user filtering.
-* **Q&A:** conversations with history, follow-up questions (rewritten into standalone queries), streaming, citations, model comparison.
-* **Admin:** users, documents by status, failed jobs, questions, unanswered rate, latency (avg/p95), API response time, tokens, Celery worker/queue status.
-* **Security:** see [docs/architecture.md](docs/architecture.md#security-model).
+⬆️ [Back to Top](#table-of-contents)
 
-## Tech stack
+<a id="features"></a>
+## ✨ Features
 
-Next.js 14 + TypeScript · FastAPI · SQLAlchemy 2 + Alembic · PostgreSQL 16 + pgvector · Celery + Redis ·
-PyMuPDF · sentence-transformers (embeddings + cross-encoder) · any OpenAI-compatible API or Ollama ·
-Docker Compose · pytest · Vitest · GitHub Actions.
+✓ Register / login with JWT, per-user document isolation  
+✓ Multi-document upload with status: `queued → processing → ready | failed`  
+✓ Background ingestion (API returns `202`, worker indexes the file)  
+✓ Hybrid search + reranking + relevance cutoff  
+✓ Streaming answers with `[1]`-style citations and "Open page" links  
+✓ Select one or several documents to search; multi-document questions keep passages from each file  
+✓ **Compare models** page: two models answer from the same retrieved passages  
+✓ Hosted LLM (any OpenAI-compatible API, tested with Groq) or local Ollama  
+✓ Rate limits, upload limits, health checks, structured logs, Alembic migrations
 
-## How it works
+⬆️ [Back to Top](#table-of-contents)
 
-Full diagrams (components, both workflows, ER model, decisions and trade-offs): **[docs/architecture.md](docs/architecture.md)**
+<a id="architecture"></a>
+## 🧩 Architecture
 
-```
-Ingestion:  upload → validate → store file → queue → worker: extract per page → chunk → embed → index → ready
-Question :  query → (rewrite follow-up) → vector ∥ full-text → RRF → rerank → threshold → LLM → validate citations
-```
-
-API reference: [docs/api.md](docs/api.md) (Swagger UI at `http://localhost:8000/docs`).
-Interview preparation: [docs/interview-guide.md](docs/interview-guide.md).
-
-## Run it on Windows with Docker Desktop
-
-**Prerequisites:** Docker Desktop (WSL 2 backend). Give it **at least 6 GB RAM** (Settings → Resources; or
-`memory=6GB` in `%UserProfile%\.wslconfig`): the worker loads two ML models.
-
-```powershell
-# 1. get the code, then in the project folder:
-copy .env.example .env
-notepad .env        # set JWT_SECRET, ADMIN_EMAILS (your email), and HOSTED_API_KEY (see "LLM options")
-
-# 2. build and start everything (first build downloads PyTorch, so allow several minutes)
-docker compose up --build
-
-# 3. open the app
-#    http://localhost:3000   the application
-#    http://localhost:8000/docs   API documentation
+```text
+Browser (Next.js, :3000)
+        │
+        ▼
+FastAPI (:8000) ───────► PostgreSQL + pgvector   (users, documents, chunks, vectors, chats)
+        │
+        ├──► Redis ◄──── Celery worker   (extract pages → chunk → embed → index)
+        │
+        └──► LLM: hosted OpenAI-compatible API (e.g. Groq)  or  Ollama (optional)
 ```
 
-Generate a secret: `python -c "import secrets; print(secrets.token_urlsafe(48))"`
-
-1. Open http://localhost:3000, **create an account** with the email you put in `ADMIN_EMAILS` (that account becomes admin).
-2. **Library** → upload a PDF → watch it go `queued → processing → ready`. The first document is slower
-   because the embedding model downloads once (cached in a Docker volume).
-3. **Ask** → type a question → answer streams in with `[1]`-style citations → click **Open page N** to see the source page.
-
-Everyday commands:
-
-```powershell
-docker compose logs -f worker          # watch ingestion
-docker compose down                    # stop (keeps data)
-docker compose down -v                 # stop and DELETE all data (database, uploads, model cache)
-docker compose exec api python scripts/smoke_test.py   # end-to-end self-test of the running stack
+```text
+Ingestion : upload → validate → store file → queue → worker: extract per page → chunk → embed → index → ready
+Question  : query → (rewrite follow-up) → vector ∥ full-text → RRF → rerank → cutoff → LLM → validate citations
 ```
 
-### LLM options
+⬆️ [Back to Top](#table-of-contents)
 
-| Option | Setup |
-|---|---|
-| **Hosted API** (OpenAI or any OpenAI-compatible service) | `HOSTED_API_KEY=…`, optionally `HOSTED_BASE_URL`, `HOSTED_MODEL` in `.env`. Choose "Hosted API" in the UI |
-| **Local Ollama** | `docker compose --profile local up`, then `docker compose exec ollama ollama pull llama3.1:8b`. Choose "Local (Ollama)" in the UI. Needs several GB of RAM |
-| **No key, just trying the UI** | Run `python scripts/dev_fake_llm.py` on the host and set `HOSTED_BASE_URL=http://host.docker.internal:9100/v1`, `HOSTED_API_KEY=anything`. It quotes the top source: good for demos, not real answers |
+<a id="project-structure"></a>
+## 📂 Project Structure
 
-If no LLM is configured the API returns a clear 503 ("Hosted LLM is not configured") instead of failing silently.
+```text
+enterprise-rag-knowledge-assistant/
+│
+├── app/                    # FastAPI backend
+│   ├── api/                # routes (auth, documents, chat)
+│   ├── core/               # config, security, metrics
+│   ├── db/                 # models, repository (SQL)
+│   ├── services/           # ingestion, retrieval, generation, evaluation
+│   ├── storage.py
+│   └── worker.py           # Celery tasks
+│
+├── alembic/                # database migrations
+├── frontend/               # Next.js app
+├── experiments/            # benchmark questions and results
+├── scripts/                # smoke test, helpers
+├── tests/
+├── docs/                   # screenshots, extra docs
+│
+├── Dockerfile
+├── docker-compose.yml
+├── requirements-base.txt
+├── requirements.txt
+├── .env.example
+├── .gitignore
+└── README.md
+```
 
-## Environment variables
+⬆️ [Back to Top](#table-of-contents)
 
-All are documented in [`.env.example`](.env.example). The important ones:
+<a id="installation"></a>
+## ⚙️ Installation
+
+### Prerequisites
+
+- Docker Desktop (WSL 2 backend) or Docker Engine on Linux
+- **At least 4 GB RAM for Docker/WSL** (6 GB is safer). The API and worker load PyTorch, an embedding model and a reranker.
+- A free API key from an OpenAI-compatible provider (for example Groq)
+
+### Steps
+
+```bash
+git clone https://github.com/anushabanoth-78/enterprise-rag-knowledge-assistant.git
+cd enterprise-rag-knowledge-assistant
+
+cp .env.example .env
+nano .env            # fill in the values described under "Configuration"
+```
+
+### PyTorch note
+
+The Dockerfile installs the CPU build of PyTorch. If the download from `download.pytorch.org` keeps dropping on your network, download the wheel once on your machine and let Docker copy it:
+
+```bash
+mkdir -p wheels
+wget -c https://download.pytorch.org/whl/cpu/torch-2.4.1%2Bcpu-cp311-cp311-linux_x86_64.whl -P wheels/
+```
+
+Then use these two lines in the `Dockerfile` instead of the `pip install torch ... --index-url` line:
+
+```dockerfile
+COPY wheels/ /tmp/wheels/
+RUN pip install --no-cache-dir /tmp/wheels/torch-2.4.1+cpu-cp311-cp311-linux_x86_64.whl
+```
+
+(`wheels/` is in `.gitignore`, so the 186 MB file is never committed.)
+
+⬆️ [Back to Top](#table-of-contents)
+
+<a id="configuration"></a>
+## 🔧 Configuration
+
+Never commit `.env`. The important variables:
 
 | Variable | Purpose |
 |---|---|
-| `JWT_SECRET` | Signs tokens. Must be random and ≥ 32 chars in production |
-| `ADMIN_EMAILS` | Comma-separated emails that become admins when they register |
-| `STORAGE_BACKEND` | `local` (Compose volume) or `s3` (Cloudflare R2 / S3 / MinIO) |
-| `CORS_ORIGINS` | Exact frontend origin(s) allowed to call the API |
-| `MAX_UPLOAD_MB`, `MAX_PAGES_PER_DOCUMENT`, `MAX_DOCUMENTS_PER_USER` | Upload limits |
-| `MIN_RERANK_SCORE` | Relevance cut-off behind "not found" answers: **tune it** (below) |
-| `HOSTED_*`, `OLLAMA_*` | LLM providers |
-| `ENVIRONMENT=production` | Makes the API refuse to start with unsafe config |
+| `JWT_SECRET` | Signs login tokens. Use a long random value (`openssl rand -hex 32`) |
+| `ADMIN_EMAILS` | Emails that become admins when they register |
+| `CORS_ORIGINS` | Frontend origin(s) allowed to call the API |
+| `HOSTED_BASE_URL` | OpenAI-compatible endpoint, e.g. `https://api.groq.com/openai/v1` |
+| `HOSTED_API_KEY` | Your provider key. **Keep it private** |
+| `HOSTED_MODEL` | A model your provider offers, e.g. `openai/gpt-oss-120b` |
+| `MIN_RERANK_SCORE` | Relevance cutoff behind "not found" answers (see below) |
+| `MAX_UPLOAD_MB`, `MAX_DOCUMENTS_PER_USER` | Upload limits |
+| `OLLAMA_URL`, `OLLAMA_MODEL` | Only for the optional local model |
 
-## Testing
+**Tuning `MIN_RERANK_SCORE`:** cross-encoder scores are often negative. A cutoff that is too high refuses questions it could answer; too low lets weak passages through. This project runs with `-13` on its test documents. Start there, then adjust: raise it if off-topic sources appear, lower it if valid questions return "not found".
 
-```powershell
-# Frontend (needs Node 20)
-cd frontend; npm ci; npm run typecheck; npm test; npm run build
+⬆️ [Back to Top](#table-of-contents)
 
-# Backend: needs a PostgreSQL with pgvector. Start a throwaway one:
-docker run -d --name pgtest -e POSTGRES_USER=rag -e POSTGRES_PASSWORD=rag -e POSTGRES_DB=rag_test -p 5433:5432 pgvector/pgvector:pg16
-python -m venv .venv; .\.venv\Scripts\Activate.ps1
-pip install -r requirements-dev.txt
-$env:TEST_DATABASE_URL = "postgresql+psycopg://rag:rag@localhost:5433/rag_test"
-pytest -q
+<a id="running-the-app"></a>
+## ▶️ Running the App
+
+```bash
+docker compose up -d --build
+docker compose ps
 ```
 
-Without `TEST_DATABASE_URL`, only the unit tests run; the API/isolation tests are skipped. The tests fake
-the ML models, the LLM, Redis and Celery, but run **real SQL against real Postgres**. The most important
-file is `tests/test_isolation.py`. `scripts/smoke_test.py` is a separate end-to-end check against a running stack.
+Wait about a minute (the models load on the first request), then open:
 
-### Evaluation (measure, don't claim)
-
-Edit `experiments/benchmark.jsonl` with questions about *your* documents (include some with
-`"expect_answer": false`), upload those documents, then:
-
-```powershell
-docker compose exec api python -m app.services.evaluation --email you@example.com
-docker compose cp api:/data/results/results.csv experiments/results.csv
-```
-
-It reports hit@k (was the right file retrieved), keyword recall, valid-citation rate, **correct refusals**,
-latency and tokens, and the Evaluation page (admin) shows the table. Use the refusal numbers to tune
-`MIN_RERANK_SCORE`. No accuracy figure appears in this repository because none has been measured on real
-documents yet.
-
-## Deployment
-
-Vercel (frontend) + Railway (API, worker, Redis) + Neon (Postgres + pgvector) + Cloudflare R2 (PDFs):
-**[docs/deployment.md](docs/deployment.md)**. In short: `STORAGE_BACKEND=s3` is mandatory for multi-service
-hosting, Redis stays private, `ENVIRONMENT=production` enables the startup safety checks, and
-`python scripts/smoke_test.py --base https://your-api` verifies the live system.
-
-## Project layout
-
-```
-app/            FastAPI app: api/ (routes), core/ (config, security, metrics), db/ (models, repository),
-                services/ (ingestion, retrieval, generation, evaluation), storage.py, worker.py
-alembic/        database migrations           tests/       pytest suite (+ helpers/fakes)
-frontend/       Next.js app (app/, components/, lib/, tests/)
-scripts/        smoke_test.py, dev_fake_llm.py   experiments/   benchmark + results
-docs/           architecture, API, deployment, interview guide
-Dockerfile · docker-compose.yml · .env.example · .github/workflows/ci.yml
-```
-
-## Verification status
-
-What was actually run while building this version, and what was **not**:
-
-| Check | Result |
+| Page | URL |
 |---|---|
-| Backend tests (`pytest`: unit, API, isolation) on real PostgreSQL 16 + pgvector 0.6 | **86 passed, 0 failed** |
-| User-isolation tests (10) mutation-checked: deleting the `owner_id` filter from retrieval SQL / `get_document` | tests fail as they should |
-| Alembic: upgrade on an empty DB, downgrade/upgrade, `alembic check` (migration matches models) | clean |
-| Live stack smoke test: real uvicorn + real Celery worker + real Redis + real Postgres (24 checks: auth, upload, async indexing, page-3 citation, streaming, persistence, isolation, refusal, delete, logout) | **24 passed, 0 failed** |
-| Admin metrics against a live Celery worker; CORS allows only the configured frontend origin | verified |
-| Frontend: `tsc --noEmit` | clean |
-| Frontend unit tests (Vitest: SSE parsing, auth redirect, error handling) | **6 passed, 0 failed** |
-| Frontend production build (`next build`) | succeeded (7 routes) |
-| `docker-compose.yml` static checks (services, volumes, build contexts, no DB/Redis ports published) | passed |
-| **Not run:** `docker compose up/build`, the Docker images | Docker was unavailable where this was built |
-| **Not run:** real embedding / cross-encoder models, a real LLM | tests and smoke test use a deterministic stand-in for the models and a fake OpenAI-compatible server |
-| **Not run:** the UI in a real browser; pgvector ≥ 0.8 iterative scan; Vercel/Railway/Neon/R2 deployment | the code is written and the fallback path for older pgvector is tested |
+| App | http://localhost:3000 |
+| Ask | http://localhost:3000/chat |
+| Library | http://localhost:3000/library |
+| Compare models | http://localhost:3000/compare |
+| API docs | http://localhost:8000/docs |
 
-So the first `docker compose up --build` on your machine is the first time the real models and images run
-together. If something fails, `docker compose logs api worker` will say what.
+1. Create an account.
+2. **Library** → upload a PDF and wait for `ready`.
+3. **Ask** → tick the document(s), type a question, read the answer and click **Open page** on a source.
 
-## Known limitations and future work
+### Everyday commands
 
-* No OCR (scanned PDFs fail with a clear message); no malware scanning.
-* `MIN_RERANK_SCORE` default is untuned. A follow-up like "and what else?" can fall below it and be refused.
-* JWT is kept in `localStorage`; httpOnly cookies are the hardening step.
-* Closing the browser mid-stream leaves an empty conversation entry; PDF `#page=N` depends on the browser's PDF viewer.
-* Not built: document-to-document comparison, a stuck-job reaper, per-document sharing, MFA, a RAG evaluation UI beyond the benchmark table.
+```bash
+docker compose logs -f api worker     # watch logs
+docker compose down                   # stop (keeps data)
+docker compose down -v                # stop and DELETE all data (database, uploads, model cache)
+```
+
+After editing code, rebuild: `docker compose build api worker && docker compose up -d --force-recreate api worker`. After editing only `.env`, the `up -d --force-recreate` part is enough.
+
+⬆️ [Back to Top](#table-of-contents)
+
+<a id="how-retrieval-works"></a>
+## 🧠 How Retrieval Works
+
+1. **Hybrid search**: pgvector similarity and PostgreSQL full-text search each return 30 candidates.
+2. **Fusion**: Reciprocal Rank Fusion (`k = 60`) merges the two rankings.
+3. **Rerank**: a cross-encoder scores each candidate against the question.
+4. **Cutoff**: passages below `MIN_RERANK_SCORE` are dropped. If none remain, the app answers "I could not find this in your documents" without calling the LLM.
+5. **Per-document balance**: when several documents are selected, the best passages of each file are kept first, so one file cannot crowd out the others.
+6. **Top 8** passages go to the LLM, which must cite them as `[1]`, `[2]`.
+7. **Citation check**: the server keeps only citation numbers that match a real source.
+
+> **Tip:** name the people or topics in multi-document questions. "Compare the education of A and B" retrieves better than "compare both students".
+
+⬆️ [Back to Top](#table-of-contents)
+
+<a id="choosing-an-llm"></a>
+## 🤖 Choosing an LLM
+
+| Option | Setup |
+|---|---|
+| **Hosted API** (recommended) | Set `HOSTED_BASE_URL`, `HOSTED_API_KEY`, `HOSTED_MODEL` in `.env`. Fast, small memory footprint |
+| **Local Ollama** (optional) | `docker compose --profile local up -d`, then `docker compose exec ollama ollama pull llama3.2:3b` and set `OLLAMA_MODEL=llama3.2:3b`. Needs several extra GB of RAM and is slow on CPU |
+
+Some models write citations in their own style (for example `【1】`). The backend converts those to plain `[1]` in both normal and streaming responses.
+
+⬆️ [Back to Top](#table-of-contents)
+
+<a id="troubleshooting"></a>
+## 🛠️ Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Docker build fails while downloading PyTorch (`BrokenPipeError`) | Download the wheel on the host and `COPY` it (see [Installation](#installation)) |
+| Frontend build fails with a `@next/swc` / `ld-linux` error on Alpine | Use `node:20-slim` instead of `node:20-alpine`, and `groupadd`/`useradd` instead of `addgroup`/`adduser` |
+| "Invalid Auth key" (HTTP 400/401) | The provider rejected the key. Test it with `curl` against `/chat/completions` before putting it in `.env` |
+| "model not found" (HTTP 404) | List available models: `curl -s $HOSTED_BASE_URL/models -H "Authorization: Bearer $KEY"` |
+| Answers say "could not find" with 0 tokens | Retrieval returned nothing: lower `MIN_RERANK_SCORE`, check the document is `ready`, or wait for the models to warm up |
+| `Local (Ollama)` shows `ConnectError` | The `ollama` container is not running. Start with `--profile local` or ignore it |
+| Out-of-memory / very slow | Give Docker/WSL more RAM (`memory=6GB` in `.wslconfig`), or stop Ollama |
+
+⬆️ [Back to Top](#table-of-contents)
+
+<a id="technologies-used"></a>
+## 🧰 Technologies Used
+
+- **Python 3.11**: FastAPI, SQLAlchemy 2, Alembic, Celery, httpx
+- **PyTorch + sentence-transformers**: embeddings (`all-MiniLM-L6-v2`) and cross-encoder reranking (pre-trained models, used for inference)
+- **PostgreSQL 16 + pgvector**: vectors and full-text search
+- **Redis**: Celery broker
+- **PyMuPDF**: page-level text extraction
+- **Next.js 14 + TypeScript**: frontend
+- **Docker Compose**: runs the whole stack
+- **Groq** (hosted) or **Ollama** (local) for answer generation
+
+⬆️ [Back to Top](#table-of-contents)
+
+<a id="limitations"></a>
+## ⚠️ Limitations
+
+- No OCR: scanned (image-only) PDFs produce little or no text.
+- No accuracy figures are published here, because they have not been measured on a benchmark yet. The repository includes an evaluation script in `experiments/`.
+- `MIN_RERANK_SCORE` needs tuning per document set.
+- Name or heading questions ("what is the name?") match weakly, because a name is usually just a title line.
+- Sign-ups are open, so a public deployment should limit registration to protect your LLM quota.
+
+⬆️ [Back to Top](#table-of-contents)
+
+<a id="future-improvements"></a>
+## 🚀 Future Improvements
+
+- OCR for scanned PDFs
+- A measured retrieval and citation benchmark with published results
+- Per-document sharing between users
+- httpOnly cookie sessions instead of `localStorage` tokens
+- Upgrade Next.js to a patched release before any public deployment
+- Public deployment with HTTPS (VPS + Caddy)
+
+⬆️ [Back to Top](#table-of-contents)
+
+<a id="project-author"></a>
+## 👩‍💻 Project Author
+
+**Banoth Anusha**  
+B.Tech, Computer Science & Engineering: Indian Institute of Technology Goa
+
+Interested in machine learning, NLP and building end-to-end applications. This project shows a full pipeline: ingestion, hybrid retrieval, reranking, LLM integration, containerised deployment.
+
+🔗 GitHub: https://github.com/anushabanoth-78
+
+⬆️ [Back to Top](#table-of-contents)
