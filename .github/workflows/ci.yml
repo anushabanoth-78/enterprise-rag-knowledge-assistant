@@ -17,6 +17,7 @@ jobs:
       DATABASE_URL: postgresql+psycopg://rag:rag@localhost:5432/rag_test
       TEST_DATABASE_URL: postgresql+psycopg://rag:rag@localhost:5432/rag_test
       JWT_SECRET: ci-secret-ci-secret-ci-secret-ci-secret-1
+      MIN_RERANK_SCORE: "-3.0"   # tests use a fake reranker tuned for this cutoff
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
