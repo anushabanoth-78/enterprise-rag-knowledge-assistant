@@ -1,0 +1,1 @@
+run_id,timestamp,provider,model,rerank,question_id,hit_at_k,keyword_recall,has_citation,citation_valid,expect_answer,refused,retrieval_ms,generation_ms,prompt_tokens,completion_tokens

@@ -1,0 +1,3 @@
+{"id": "q1", "question": "Replace with a question whose answer is in one of your uploaded PDFs", "expected_source": "your-document.pdf", "expected_keywords": ["keyword one", "keyword two"]}
+{"id": "q2", "question": "Replace with a question that needs two documents to answer", "expected_source": "your-document.pdf", "expected_keywords": ["keyword"]}
+{"id": "q3", "question": "Replace with a question your documents do NOT answer (tests refusal)", "expected_source": "", "expected_keywords": [], "expect_answer": false}
