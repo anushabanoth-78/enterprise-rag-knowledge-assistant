@@ -2,8 +2,7 @@ FROM python:3.11-slim
 WORKDIR /srv
 ENV PYTHONUNBUFFERED=1 HF_HOME=/hf-cache PIP_DEFAULT_TIMEOUT=120 PIP_RETRIES=10
 # CPU-only torch keeps the image far smaller than the default CUDA build.
-COPY wheels/ /tmp/wheels/
-RUN pip install --no-cache-dir /tmp/wheels/torch-2.4.1+cpu-cp311-cp311-linux_x86_64.whl
+RUN pip install --no-cache-dir torch==2.4.1 --index-url https://download.pytorch.org/whl/cpu
 COPY requirements-base.txt requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 # Run as an unprivileged user; these are the only writable locations.
